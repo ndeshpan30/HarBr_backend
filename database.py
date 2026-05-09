@@ -26,14 +26,24 @@ def save_listing(ulpin, rent, deposit, dietary):
     conn.commit()
     conn.close()
 import redis
+import os
+from dotenv import load_dotenv
 
-# Replace with your actual Upstash URL
-REDIS_URL = "your_upstash_url_here"
-cache = redis.from_url(REDIS_URL, decode_responses=True)
+load_dotenv()
+REDIS_URL = os.getenv("REDIS_URL")
+
+cache = None
+if REDIS_URL:
+    try:
+        cache = redis.from_url(REDIS_URL, decode_responses=True)
+    except Exception as e:
+        print(f"Redis initialization failed: {e}")
 
 def cache_harmony_score(tenant_id, house_id, score):
-    # This saves the score for 10 minutes (600 seconds)
-    cache.setex(f"harmony:{tenant_id}:{house_id}", 600, score)
+    if cache:
+        cache.setex(f"harmony:{tenant_id}:{house_id}", 600, score)
 
 def get_cached_score(tenant_id, house_id):
-    return cache.get(f"harmony:{tenant_id}:{house_id}")
+    if cache:
+        return cache.get(f"harmony:{tenant_id}:{house_id}")
+    return None

@@ -17,21 +17,8 @@ app = FastAPI(title="HarBr v2.0")
 from fastapi.staticfiles import StaticFiles
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-import urllib.parse
-
 def string_similarity(s1: str, s2: str) -> float:
     return difflib.SequenceMatcher(None, s1.lower(), s2.lower()).ratio()
-
-def generate_property_vision(bhk: int, city: str, amenities: list, furnishing: str) -> str:
-    """The Vision Agent: Generates a bespoke property image URL based on listing specifications."""
-    prompt = f"Interior of a {bhk} BHK {furnishing} apartment in {city}, real estate photography, well-lit, luxury"
-    if amenities:
-        prompt += f", featuring {', '.join(amenities)}"
-    
-    encoded = urllib.parse.quote(prompt)
-    seed = random.randint(1, 1000000)
-    return f"https://image.pollinations.ai/prompt/{encoded}?width=800&height=400&nologo=true&seed={seed}"
-
 class PropertyListing(BaseModel):
     ulpin: str
     owner_name: str
@@ -115,8 +102,7 @@ def generate_bulk_listings(count=100) -> List[dict]:
             "furnishing": furnishing_val,
             "facing": random.choice(["North-East", "East", "Vastu-Compliant", "Other"]),
             "wfh_friendly": True,
-            "pet_friendly": True,
-            "image_url": generate_property_vision(bhk_val, city_val, amenities_val, furnishing_val)
+            "pet_friendly": True
         })
     return listings
 
@@ -273,8 +259,7 @@ def post_to_neon_db(ulpin: str, owner_name: str, rent: int, bhk: int, city: str,
         "lift": True, "transport": [1.0, 0.5], "dietary_tags": [], "pet_policy": "No Pets",
         "utilities": [], "amenities": [], "doc_tags": ["A-Khata"], "water_tags": ["Cauvery Connection"],
         "commute_tags": [], "furnishing": "Semi Furnished", "facing": "East",
-        "wfh_friendly": True, "pet_friendly": False,
-        "image_url": generate_property_vision(bhk, city, [], "Semi Furnished")
+        "wfh_friendly": True, "pet_friendly": False
     }
     LISTINGS.append(payload)
     return f"Success! Property {ulpin} listed in {city} for {rent}."
@@ -300,7 +285,6 @@ Convert vague, natural language queries into strict database parameters using qu
 If a user gives a vague query (e.g., just "find me a home"), DO NOT search the database yet. Interview them interactively! Ask about their lifestyle, if they have pets, what their office commute looks like, or if they need specific amenities. Only call the database when you have a good profile.
 CRITICAL: When you find properties using query_neon_db, present them using this EXACT HTML block for EACH property. Ensure you replace the bracketed tags with the actual values returned by the database function:
 <div class="glass-card">
-    <img src="[image_url]" style="width: 100%; height: 220px; object-fit: cover; border-radius: 8px; margin-bottom: 12px;">
     <h3 style="margin-top:0; color:#F9E076;">[owner_name]'s [bhk] BHK in [city]</h3>
     <p style="color: #A0A0A0; font-size: 0.9em; margin-bottom: 4px;">ULPIN: [ulpin] • [floor_info]</p>
     <div style="margin-bottom: 12px;">
