@@ -1,7 +1,11 @@
 import streamlit as st
 import requests
+import os
 
-API_URL = "http://127.0.0.1:8080" 
+try:
+    API_URL = st.secrets.get("API_URL", os.getenv("API_URL", "http://127.0.0.1:8080"))
+except Exception:
+    API_URL = os.getenv("API_URL", "http://127.0.0.1:8080") 
 
 # --- 1. CLAUDE-INSPIRED GLASSMORPHISM CSS ---
 st.set_page_config(page_title="HarBr | Trust Infrastructure", layout="centered")
