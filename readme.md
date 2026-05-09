@@ -1,17 +1,24 @@
-The Problem: The "Trust Gap" in Urban Renting
-The Bengaluru rental market is currently a "black box."
- Tenants face two major risks that traditional platforms 
- Legal Fraud: Listings are often unverified, leaving tenants vulnerable to title disputes, "B-Khata" scams, and deposit fraud.
- Lifestyle Friction: Traditional filters (BHK/Rent) fail to account for the "human"
-  side of living, leading to mismatches in dietary habits, WFH needs, and community rules.✅ 
-  
-The Solution: HarBr (Trust-as-a-Service)HarBr transforms the rental process from a directory into a Verified Workspace. We replace blind trust with autonomous agents.
+HarBr — Rental Trust Infrastructure
+Bengaluru's rental market has no verification layer. Tenants get scammed on title fraud, illegal deposits, and lifestyle mismatches. HarBr fixes this with a multi-agent chatbot that audits, matches, and lists — before you ever visit a property.
 
-How it Solves the Problem: 
-The Shield Agent:Automatically audits ULPIN (Land Records) to ensure the property is legally clear and the owner is authentic before you ever visit.
-The Harmony EngineUses a weighted mathematical algorithm to calculate a Compatibility Score (%) based on your specific lifestyle priorities (Diet, Pets, WFH).
-The Compact UIA high-density, Notion-inspired workspace that cuts through the noise, providing 100% of the critical data in 20% of the space.
+Architecture
+Frontend: Streamlit chatbot UI with agent thinking trace visible to the user.
+Backend: FastAPI server on port 8080, exposing /orchestrator/chat.
+Agent Layer: Google Gemini orchestrates three MCP tools via mcp_server.py.
+Databases: SQLite (harbr_seed.db) for mock land records; Neon PostgreSQL for live listings, owners, tenants, and agreements.
 
- Key Technical Highlights
- 
- Deep Verification: Integrated with mock state land records for real-time title auditing.Weighted Logic: Precise matching that respects "Dealbreakers" vs. "Preferences.
+Agents
+Shield Agent — check_ulpin(ulpin)
+Audits a property's ULPIN against mock state land records. Returns owner name, area, city, legal status (Clear / Disputed), and blacklist flag. Blocks the flow if a dispute is detected.
+Search Agent — search_properties(budget, neighborhood, bhk, ...)
+Queries Neon listings with hard filters: max rent, BHK, neighborhood, pet-friendliness, dietary preference, and amenity. Returns ranked results.
+List Agent — list_property(ulpin, owner, rent, bhk, city, floor_info)
+Ingests a new verified listing into Neon PostgreSQL. Only fires after all required fields are collected conversationally.
+PDF Agent — generate_health_card(data)
+Generates a downloadable Property Health Card (ULPIN, market rent, effective rent, deposit) via fpdf.
+
+Data Layer
+
+100 seeded land records, 15% marked Disputed to stress-test the Shield Agent
+PMAY subsidy table for income-bracket matching
+Blacklist table for flagged owners
