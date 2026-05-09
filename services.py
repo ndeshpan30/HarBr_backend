@@ -5,11 +5,32 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 from enum import Enum
 import difflib
+import google.generativeai as genai
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 app = FastAPI(title="HarBr v2.0")
+from fastapi.staticfiles import StaticFiles
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+import urllib.parse
 
 def string_similarity(s1: str, s2: str) -> float:
     return difflib.SequenceMatcher(None, s1.lower(), s2.lower()).ratio()
+
+def generate_property_vision(bhk: int, city: str, amenities: list, furnishing: str) -> str:
+    """The Vision Agent: Generates a bespoke property image URL based on listing specifications."""
+    prompt = f"Interior of a {bhk} BHK {furnishing} apartment in {city}, real estate photography, well-lit, luxury"
+    if amenities:
+        prompt += f", featuring {', '.join(amenities)}"
+    
+    encoded = urllib.parse.quote(prompt)
+    seed = random.randint(1, 1000000)
+    return f"https://image.pollinations.ai/prompt/{encoded}?width=800&height=400&nologo=true&seed={seed}"
 
 class PropertyListing(BaseModel):
     ulpin: str
@@ -68,11 +89,16 @@ def generate_bulk_listings(count=100) -> List[dict]:
         deposit = rent * random.choice([5, 10])
         doc_val = random.choice(['A-Khata', 'B-Khata', 'Disputed'])
         
+        city_val = random.choice(neighborhoods)
+        bhk_val = random.choice([1, 2, 3, 4])
+        amenities_val = random.sample(amenity_options, random.randint(1, 3))
+        furnishing_val = random.choice(["Fully Furnished", "Semi Furnished", "Unfurnished"])
+        
         listings.append({
             "ulpin": f"10002000{random.randint(100000, 999999)}",
             "owner_name": owner_name,
-            "city": random.choice(neighborhoods),
-            "bhk": random.choice([1, 2, 3, 4]),
+            "city": city_val,
+            "bhk": bhk_val,
             "area_sqft": random.randint(500, 2400),
             "rent": rent,
             "deposit": deposit,
@@ -82,14 +108,15 @@ def generate_bulk_listings(count=100) -> List[dict]:
             "dietary_tags": random.sample(dietary_options, random.randint(1, 2)),
             "pet_policy": random.choice(pet_options),
             "utilities": random.sample(utility_options, random.randint(1, 3)),
-            "amenities": random.sample(amenity_options, random.randint(1, 3)),
+            "amenities": amenities_val,
             "doc_tags": [doc_val] if doc_val != 'Disputed' else [],
             "water_tags": ["Cauvery Connection"] if "Cauvery Water" in utility_options else ["Borewell"],
             "commute_tags": [],
-            "furnishing": random.choice(["Fully Furnished", "Semi Furnished", "Unfurnished"]),
+            "furnishing": furnishing_val,
             "facing": random.choice(["North-East", "East", "Vastu-Compliant", "Other"]),
             "wfh_friendly": True,
-            "pet_friendly": True
+            "pet_friendly": True,
+            "image_url": generate_property_vision(bhk_val, city_val, amenities_val, furnishing_val)
         })
     return listings
 
@@ -197,11 +224,154 @@ def matcher_calculate(req: TenantProfile):
     matches.sort(key=lambda x: x["score"], reverse=True)
     return {"matches": matches}
 
+@app.post("/shield-audit")
+async def run_shield_audit(property_data: dict):
+    try:
+        prompt = f"""
+        Act as the 'HarBr Shield Agent', a professional legal and lifestyle auditor for Bangalore rentals.
+        Analyze this property: {property_data}
+        
+        Provide a high-density 'Trust Report' in exactly 3 bullet points:
+        1. Legal Standing: Analyze the ULPIN/Khata status mentioned.
+        2. Infrastructure Health: Comment on water source and amenities.
+        3. Harmony Verdict: Is this property actually worth the deposit based on market trends?
+        
+        Tone: Professional, institutional, and direct.
+        """
+        response = model.generate_content(prompt)
+        return {"audit_report": response.text}
+    except Exception as e:
+        print(f"Gemini API Error: {e}")
+        return {"audit_report": "⚠️ Shield Agent is currently offline. Basic verification applies."}
+
 @app.post("/list-house")
 def list_house(listing: PropertyListing):
     LISTINGS.append(listing.model_dump())
     return {"message": "Listing added successfully", "total_listings": len(LISTINGS)}
 
+# --- NEW ORCHESTRATOR LOGIC ---
+
+def query_neon_db(budget_max: int, neighborhood: str, bhk: int, pet_friendly: bool = False, dietary_pref: str = "Any", must_have_amenity: str = "Any") -> list:
+    """For searching the 100+ property listings in the database. Call this to find homes. Returns a list of properties."""
+    matches = []
+    # simplistic matching
+    for lst in LISTINGS:
+        if budget_max > 0 and lst["rent"] > budget_max: continue
+        if bhk > 0 and lst["bhk"] != bhk: continue
+        if neighborhood and neighborhood.lower() not in lst["city"].lower(): continue
+        if pet_friendly and lst["pet_policy"] == "No Pets": continue
+        if dietary_pref != "Any" and dietary_pref not in lst["dietary_tags"]: continue
+        if must_have_amenity != "Any" and must_have_amenity not in lst["amenities"]: continue
+        matches.append(lst)
+    return matches[:3]
+
+def post_to_neon_db(ulpin: str, owner_name: str, rent: int, bhk: int, city: str, floor_info: str) -> str:
+    """For finalized property listings. Call this ONLY when all information is gathered."""
+    payload = {
+        "ulpin": ulpin, "owner_name": owner_name, "city": city, "bhk": bhk,
+        "area_sqft": 1000, "rent": rent, "deposit": rent*10, "floor_info": floor_info,
+        "lift": True, "transport": [1.0, 0.5], "dietary_tags": [], "pet_policy": "No Pets",
+        "utilities": [], "amenities": [], "doc_tags": ["A-Khata"], "water_tags": ["Cauvery Connection"],
+        "commute_tags": [], "furnishing": "Semi Furnished", "facing": "East",
+        "wfh_friendly": True, "pet_friendly": False,
+        "image_url": generate_property_vision(bhk, city, [], "Semi Furnished")
+    }
+    LISTINGS.append(payload)
+    return f"Success! Property {ulpin} listed in {city} for {rent}."
+
+def verify_ulpin(ulpin: str) -> dict:
+    """To check the government land records."""
+    record = get_legal_record(ulpin)
+    if record: return {"status": record["status"], "owner": record["owner_name"]}
+    return {"status": "Unverified", "owner": "Unknown"}
+
+orchestrator_sys_prompt = """
+1. Core Identity & Ethos
+You are HarBr, the primary intelligence behind the HarBr Trust Infrastructure. Your purpose is to eliminate friction and distrust in the Bangalore rental market. You are sophisticated, highly interactive, and charismatic. You are not a bland search engine; you are an elite, proactive real-estate concierge.
+Your tone is inspired by Claude AI: clear, intellectual, yet deeply conversational and warm. 
+CRITICAL RULE: NEVER be boring. ALWAYS ask engaging follow-up questions to dig deeper into the user's lifestyle needs, commute preferences, or listing details.
+
+2. The Three Pillars of Execution
+Pillar I: Effortless Listing (The Ingestor)
+If a user expresses intent to list, do not ask for all details at once. Ask for information in small, logical chunks (BHK, Rent, Location, ULPIN). Be conversational ("That sounds like a great property! Which neighborhood is it in?"). Once all data is gathered, trigger the post_to_neon_db function.
+
+Pillar II: Precision Discovery (The Scout)
+Convert vague, natural language queries into strict database parameters using query_neon_db. If they don't specify max budget, use 100000. If they don't specify bhk, use 0. If they don't specify neighborhood, use "".
+If a user gives a vague query (e.g., just "find me a home"), DO NOT search the database yet. Interview them interactively! Ask about their lifestyle, if they have pets, what their office commute looks like, or if they need specific amenities. Only call the database when you have a good profile.
+CRITICAL: When you find properties using query_neon_db, present them using this EXACT HTML block for EACH property. Ensure you replace the bracketed tags with the actual values returned by the database function:
+<div class="glass-card">
+    <img src="[image_url]" style="width: 100%; height: 220px; object-fit: cover; border-radius: 8px; margin-bottom: 12px;">
+    <h3 style="margin-top:0; color:#F9E076;">[owner_name]'s [bhk] BHK in [city]</h3>
+    <p style="color: #A0A0A0; font-size: 0.9em; margin-bottom: 4px;">ULPIN: [ulpin] • [floor_info]</p>
+    <div style="margin-bottom: 12px;">
+        <span class="badge">[pet_policy]</span>
+        <span class="badge">[first dietary tag]</span>
+        <span class="badge">[first amenity]</span>
+    </div>
+    <p style="color: #E0E0E0; font-family: 'Fraunces', serif; font-size: 1rem; margin-bottom: 12px;"><strong>Why it matches:</strong> [Generate a 1-sentence reason based on the user's query]</p>
+    <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px; margin-top: 4px;">
+        <span style="font-size: 1.2em; font-weight: bold; color: #E0E0E0;">₹[rent]<span style="font-size: 0.6em; color: #A0A0A0; font-weight: normal;"> /mo</span></span>
+    </div>
+</div>
+
+Pillar III: The Shield Agent (The Auditor)
+Provide real-time legal and fairness audits. You are an expert on the Karnataka Rent Control Act and the Model Tenancy Act (2021). If a user mentions a 10-month deposit, explain standard norms. Start your analysis with a "Scanning..." message. Use <div class="audit-report"> for legal deep-dives.
+
+4. Operational Guardrails
+Zero-Form Policy: Do not ask the user to fill out a form. Ask conversationally.
+"""
+
+orchestrator_model = genai.GenerativeModel(
+    model_name='gemini-2.5-flash',
+    tools=[query_neon_db, post_to_neon_db, verify_ulpin],
+    system_instruction=orchestrator_sys_prompt
+)
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    messages: List[ChatMessage]
+
+@app.post("/orchestrator/chat")
+def orchestrator_chat(req: ChatRequest):
+    history = []
+    if len(req.messages) > 1:
+        for msg in req.messages[:-1]:
+            # Gemini roles: 'user' or 'model'
+            role = "model" if msg.role == "assistant" else "user"
+            history.append({"role": role, "parts": [msg.content]})
+            
+    try:
+        chat = orchestrator_model.start_chat(history=history, enable_automatic_function_calling=True)
+        
+        # Track history length before sending message
+        hist_len_before = len(chat.history)
+        
+        current_prompt = req.messages[-1].content
+        response = chat.send_message(current_prompt)
+        
+        thinking_process = []
+        for msg in chat.history[hist_len_before:]:
+            for part in msg.parts:
+                # Some parts might not have a function_call attribute directly, depending on protobuf wrappers
+                # In google.generativeai, it's typically accessed via part.function_call
+                if getattr(part, 'function_call', None):
+                    # Extract arguments handling protobuf MapComposite
+                    args_dict = {k: v for k, v in part.function_call.args.items()}
+                    thinking_process.append({
+                        "agent": "HarBr Orchestrator",
+                        "function": part.function_call.name,
+                        "args": args_dict
+                    })
+                    
+        return {"reply": response.text, "thinking_process": thinking_process}
+    except Exception as e:
+        print(f"Orchestrator API Error: {e}")
+        return {"reply": f"Neural link severed: {e}", "thinking_process": []}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8080)
+

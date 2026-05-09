@@ -4,3 +4,5 @@ pydantic
 streamlit
 requests
 fpdf
+google-generativeai
+python-dotenv
